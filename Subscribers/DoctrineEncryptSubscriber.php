@@ -143,9 +143,8 @@ class DoctrineEncryptSubscriber implements EventSubscriber {
      * @param PreUpdateEventArgs $args
      */
     public function preUpdate(PreUpdateEventArgs $args) {
-
         $entity = $args->getEntity();
-        $this->processFields($entity, true, $args->getEntityChangeSet());
+        $this->processFields($entity);
     }
 
     /**
@@ -210,13 +209,12 @@ class DoctrineEncryptSubscriber implements EventSubscriber {
      *
      * @param Object $entity doctrine entity
      * @param Boolean $isEncryptOperation If true - encrypt, false - decrypt entity
-     * @param array $changeSet the change set of the doctrine entity
      *
      * @throws \RuntimeException
      *
      * @return object|null
      */
-    public function processFields($entity, $isEncryptOperation = true, array $changeSet = array()) {
+    public function processFields($entity, $isEncryptOperation = true) {
 
         if(!empty($this->encryptor)) {
 
@@ -237,6 +235,10 @@ class DoctrineEncryptSubscriber implements EventSubscriber {
             //Foreach property in the reflection class
             foreach ($properties as $refProperty) {
 
+                if ($this->annReader->getPropertyAnnotation($refProperty, 'Doctrine\ORM\Mapping\Embedded')) {
+                    $this->handleEmbeddedAnnotation($entity, $refProperty, $isEncryptOperation);
+                    continue;
+                }
                 /**
                  * If followed standards, method name is getPropertyName, the propertyName is lowerCamelCase
                  * So just uppercase first character of the property, later on get and set{$methodName} wil be used
@@ -249,23 +251,17 @@ class DoctrineEncryptSubscriber implements EventSubscriber {
                  */
                 if ($this->annReader->getPropertyAnnotation($refProperty, self::ENCRYPTED_ANN_NAME)) {
 
-                    $propName = $refProperty->getName();
-
-                    /**
-                     * We update the field only when its value is modified
-                     */
-                    if (false === array_key_exists($propName, $changeSet)) {
-                        continue;
-                    }
 
                     /**
                      * If it is public lets not use the getter/setter
                      */
                     if ($refProperty->isPublic()) {
+                        $propName = $refProperty->getName();
                         $entity->$propName = $this->encryptor->$encryptorMethod($refProperty->getValue());
                     } else {
                         //If private or protected check if there is an getter/setter for the property, based on the $methodName
                         if ($reflectionClass->hasMethod($getter = 'get' . $methodName) && $reflectionClass->hasMethod($setter = 'set' . $methodName)) {
+
                             //Get the information (value) of the property
                             try {
                                 $getInformation = $entity->$getter();
@@ -303,6 +299,30 @@ class DoctrineEncryptSubscriber implements EventSubscriber {
         }
 
         return null;
+    }
+
+    private function handleEmbeddedAnnotation($entity, $embeddedProperty, $isEncryptOperation = true)
+    {
+        $reflectionClass = new ReflectionClass($entity);
+        $propName = $embeddedProperty->getName();
+        $methodName = ucfirst($propName);
+
+        if ($embeddedProperty->isPublic()) {
+            $embeddedEntity = $embeddedProperty->getValue();
+        } else {
+            if ($reflectionClass->hasMethod($getter = 'get' . $methodName) && $reflectionClass->hasMethod($setter = 'set' . $methodName)) {
+
+                //Get the information (value) of the property
+                try {
+                    $embeddedEntity = $entity->$getter();
+                } catch(\Exception $e) {
+                    $embeddedEntity = null;
+                }
+            }
+        }
+        if ($embeddedEntity) {
+            $this->processFields($embeddedEntity, $isEncryptOperation);
+        }
     }
 
     /**
